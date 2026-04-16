@@ -1,0 +1,4 @@
+*.o
+bin/
+.cproject
+.project
