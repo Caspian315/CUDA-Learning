@@ -96,3 +96,86 @@ sudo reboot
   // prop.multiProcessorCount (SM 数量)
   // prop.maxThreadsPerBlock (单 Block 最大线程数，通常为 1024)
   ```
+
+
+
+## Chapter04 CUDA C并行编程
+
+### Chapter 4 第一个并行程序：矢量求和 (Vector Addition)
+
+本节通过实现两个数组的并行相加，走通了完整的 CUDA 异构计算工作流，并跨越了几个经典的 C/C++ 语法与并行思维陷阱。
+
+#### 1. 完整的异构计算闭环
+
+一个标准的 CUDA 算子调度流程必须严格遵循以下 5 个步骤：
+
+1. **显存分配**：使用 `cudaMalloc` 为输入和输出数据在设备端（GPU）开辟空间。
+2. **数据下发 (H2D)**：使用 `cudaMemcpy(..., cudaMemcpyHostToDevice)` 将主机（CPU）初始化的数据拷贝到 GPU。
+3. **核函数发射**：通过 `<<<Grid, Block>>>` 语法配置并发规模并调用 `__global__` 函数。
+4. **数据回传 (D2H)**：使用 `cudaMemcpy(..., cudaMemcpyDeviceToHost)` 将 GPU 算好的结果拷贝回主机内存。
+5. **释放资源**：严格成对使用 `cudaFree` 释放设备指针，防止显存泄漏。
+
+#### 2. CUDA 核心内置变量 (Built-in Variables)
+
+在传统的 C 语言中，我们在 `for` 循环里使用 `i` 来遍历数组。在 GPU 的并行世界里，没有显式的循环，数组的索引由**当前线程的硬件物理坐标**来决定：
+
+- `blockIdx.x`：获取当前线程所在的线程块（Block）在 X 维度上的索引（ID）。
+- **并行映射思维**：`int tid = blockIdx.x;`，直接让第 `tid` 个线程，去处理数组中下标为 `tid` 的元素。
+
+#### 3. 执行配置的硬件极限
+
+- 调用语法：`add<<<N, 1>>>` 意味着启动了 $N$ 个线程块（Block），每个块里只有 $1$ 个线程（Thread）。
+- **思考题留存**：当前通过增加 Block 的数量来覆盖数组长度 $N$。但由于硬件（如 RTX 5060）存在并发调度的物理上限，当 $N$ 达到百万级别（如 $N = 100,000$）时，这种纯靠拉高 Block 数量的策略将面临硬件限制，需要引入更高级的线程组织策略。
+
+**but!!!**
+
+当我们面临十万、百万级别的大规模数据（例如 $N=100,000$）时，单纯依赖增加 Block 数量（如 `<<<N, 1>>>`）会导致大量硬件资源浪费，甚至超出 GPU 网格维度的物理上限。
+
+为了真正榨干 GPU 的算力，必须充分利用 **Block 内部的线程并发**，并引入工业界标准的**网格跨步循环**模式。
+
+#### 1. 核心思想：让线程“跑起来搬砖”
+
+不要为每一个数据分配一个专属的死板线程。相反，我们只启动足够“塞满”显卡流多处理器（SM）的线程总数。这批线程处理完当前的数据后，集体向后跳跃一个**网格总长度（Stride）**，继续处理下一波数据，直到遍历完整个大数组。
+
+#### 2. 终极寻址与跨步公式
+
+在核函数内部，寻址逻辑从单纯的 `blockIdx.x` 进化为以下三步：
+
+C
+
+```
+__global__ void add(int *a, int *b, int *c, int n){
+    // 1. 获取当前线程的全局绝对 ID（我是全网格中的第几个工人）
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    
+    // 2. 计算步长：整个网格一次发射的线程总数
+    int stride = gridDim.x * blockDim.x; 
+
+    // 3. 跨步循环：只要没越界，算完一个往后跳 stride 步
+    for (int i = tid; i < n; i += stride) {
+        c[i] = a[i] + b[i];
+    }
+}
+```
+
+#### 3. 向上取整的数学魔法
+
+在 CPU 端配置执行参数 `<<<Grid, Block>>>` 时，我们需要计算需要多少个 Block。
+
+如果直接使用整数除法 `N / threadsPerBlock`（向下取整），会导致尾部无法被整除的数据被直接抛弃。
+
+**工业标准写法（向上取整 Ceiling）：**
+
+C
+
+```
+int threadsPerBlock = 256;
+// 核心公式：(被除数 + 除数 - 1) / 除数
+int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock; 
+
+add<<<blocksPerGrid, threadsPerBlock>>>(dev_a, dev_b, dev_c, N);
+```
+
+*原理：加上 `除数 - 1` 后再做截断除法，能完美保证即便多出 1 个数据，也会为其额外分配一个完整的 Block。多余空闲的线程会由核函数内部的 `i < n` 越界保护挡住，保证安全。*
+
+#### 
