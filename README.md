@@ -212,7 +212,7 @@ int id = threadIdx.x + blockIdx * blockDim.x;
 
 2.二维网格二维线程块(特别注意一下id)：
 
-```
+```cuda
 dim3 grid_size(2,2);
 dim3 block_size(4,4);
 kernel_fun<<<grid_size,block_size>>>(...);
@@ -223,7 +223,7 @@ int id = blockId * (blockDim.x * blockDim.y) + threadId;
 
 3.三维网格三维线程块:
 
-```
+```cuda
 dim3 grid_size(2,2,2);
 dim3 block_size(4,4,2);
 kernel_fun<<<grid_size,block_size>>>(...);
