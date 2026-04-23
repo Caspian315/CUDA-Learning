@@ -99,83 +99,136 @@ sudo reboot
 
 
 
-## Chapter04 CUDA C并行编程
+### Chapter04  CUDA 多线程
 
-### Chapter 4 第一个并行程序：矢量求和 (Vector Addition)
+1. CUDA可以组织三维的网格和线程块；
+2. blockIdx和threadIdx是类型为uint3的变量，该类型是一个结构体，具有x,y,z三个成员(三个成员都为无符号类型的成员构成) 
 
-本节通过实现两个数组的并行相加，走通了完整的 CUDA 异构计算工作流，并跨越了几个经典的 C/C++ 语法与并行思维陷阱。
+$$
+blockIdx.x
+$$
 
-#### 1. 完整的异构计算闭环
+$$
+threadIdx.x
+$$
 
-一个标准的 CUDA 算子调度流程必须严格遵循以下 5 个步骤：
+3. gridDim和blockDim是类型为dim3的变量，该类型是一个结构体，具有x,y,z三个成员
 
-1. **显存分配**：使用 `cudaMalloc` 为输入和输出数据在设备端（GPU）开辟空间。
-2. **数据下发 (H2D)**：使用 `cudaMemcpy(..., cudaMemcpyHostToDevice)` 将主机（CPU）初始化的数据拷贝到 GPU。
-3. **核函数发射**：通过 `<<<Grid, Block>>>` 语法配置并发规模并调用 `__global__` 函数。
-4. **数据回传 (D2H)**：使用 `cudaMemcpy(..., cudaMemcpyDeviceToHost)` 将 GPU 算好的结果拷贝回主机内存。
-5. **释放资源**：严格成对使用 `cudaFree` 释放设备指针，防止显存泄漏。
+$$
+gridDim.x
+$$
 
-#### 2. CUDA 核心内置变量 (Built-in Variables)
+$$
+blockDim.x
+$$
 
-在传统的 C 语言中，我们在 `for` 循环里使用 `i` 来遍历数组。在 GPU 的并行世界里，没有显式的循环，数组的索引由**当前线程的硬件物理坐标**来决定：
+4.取值范围
 
-- `blockIdx.x`：获取当前线程所在的线程块（Block）在 X 维度上的索引（ID）。
-- **并行映射思维**：`int tid = blockIdx.x;`，直接让第 `tid` 个线程，去处理数组中下标为 `tid` 的元素。
+blockIdx.x范围[0,gridDim.x - 1]
 
-#### 3. 执行配置的硬件极限
+> [!CAUTION]
+>
+> 内建变量只在核函数有效，且无需定义！
 
-- 调用语法：`add<<<N, 1>>>` 意味着启动了 $N$ 个线程块（Block），每个块里只有 $1$ 个线程（Thread）。
-- **思考题留存**：当前通过增加 Block 的数量来覆盖数组长度 $N$。但由于硬件（如 RTX 5060）存在并发调度的物理上限，当 $N$ 达到百万级别（如 $N = 100,000$）时，这种纯靠拉高 Block 数量的策略将面临硬件限制，需要引入更高级的线程组织策略。
+5.调用核函数
 
-**but!!!**
+<<<grid_size,block_size>>> grid_size-->gridDim.x , block_size -> blockDim.x
 
-当我们面临十万、百万级别的大规模数据（例如 $N=100,000$）时，单纯依赖增加 Block 数量（如 `<<<N, 1>>>`）会导致大量硬件资源浪费，甚至超出 GPU 网格维度的物理上限。
+gridDim和blockDim没有指定的维度默认为1:
 
-为了真正榨干 GPU 的算力，必须充分利用 **Block 内部的线程并发**，并引入工业界标准的**网格跨步循环**模式。
+假设传入<<<2,4>>>
 
-#### 1. 核心思想：让线程“跑起来搬砖”
+gridDim.x = 2 gridDim.y = 1 gridDim.z = 1
 
-不要为每一个数据分配一个专属的死板线程。相反，我们只启动足够“塞满”显卡流多处理器（SM）的线程总数。这批线程处理完当前的数据后，集体向后跳跃一个**网格总长度（Stride）**，继续处理下一波数据，直到遍历完整个大数组。
+blockDim.x = 4 blockDim.y = 1 blockDim.z = 1 
 
-#### 2. 终极寻址与跨步公式
 
-在核函数内部，寻址逻辑从单纯的 `blockIdx.x` 进化为以下三步：
 
-C
+定义**多维**网格和线程块 (c++构造函数语法) ：
+dim3 grid_size(Gx,Gy,Gz);
 
-```
-__global__ void add(int *a, int *b, int *c, int n){
-    // 1. 获取当前线程的全局绝对 ID（我是全网格中的第几个工人）
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    // 2. 计算步长：整个网格一次发射的线程总数
-    int stride = gridDim.x * blockDim.x; 
+dim3 block_size(Bx,By,Bz);
 
-    // 3. 跨步循环：只要没越界，算完一个往后跳 stride 步
-    for (int i = tid; i < n; i += stride) {
-        c[i] = a[i] + b[i];
-    }
-}
+举个例子，定义一个2 * 3 * 1的网格，5 * 3 * 1的线程块，代码中定义如下：
+
+```cuda
+dim3 grid_size(2,3)
+dim3 block_size(5,3)
 ```
 
-#### 3. 向上取整的数学魔法
+> [!CAUTION]
+>
+> 特别要注意，块或者线程的坐标与线代中的矩阵是不同的
+>
+> 比如一个dim3 grid_size(3,2,1)是这样的：
+>
+> (0,0)  (1,0)  (2,0)
+>
+> (0,1)  (1,1)  (2,1)
 
-在 CPU 端配置执行参数 `<<<Grid, Block>>>` 时，我们需要计算需要多少个 Block。
+需要注意，多维网格和多维线程块本质是一维的，GPU物理上不分块。
 
-如果直接使用整数除法 `N / threadsPerBlock`（向下取整），会导致尾部无法被整除的数据被直接抛弃。
+**每个线程都有唯一的标识：**
 
-**工业标准写法（向上取整 Ceiling）：**
+```cuda
+int tid = threadIdx.x + threadIdx.y * blockIdx.y //每个线程块中线程的索引
+int bid = blockIdx.x + blockIdx.y * gridDim.x //每个网格中线程块的索引
+```
 
-C
+
+
+6.网格和线程块的大小限制
+
+网格大小限制：
+
+gridDim.x最大值 ： 2^31 - 1
+
+gridDim,y最大值 ：2^16 - 1
+
+gridDIm.z最大值 :  2^16 - 1
+
+**线程块大小限制：**
+
+blockDim.x最大值 ： 1024
+
+blockDim.y最大值 ： 1024
+
+blockDim.z最大值 : 64
+
+**注意：线程块总的大小最大为1024 !! 也就是说x,y,z三者乘积不能超过1024！**
+
+
+
+### 线程索引计算方式总结
+
+1.一维网格一维线程块：
+
+```cuda
+dim3 grid_size(4);
+dim3 block_size(8);
+kernel_fun<<<grid_size,block_size>>>(...);
+int id = threadIdx.x + blockIdx * blockDim.x;
+```
+
+2.二维网格二维线程块(特别注意一下id)：
 
 ```
-int threadsPerBlock = 256;
-// 核心公式：(被除数 + 除数 - 1) / 除数
-int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock; 
-
-add<<<blocksPerGrid, threadsPerBlock>>>(dev_a, dev_b, dev_c, N);
+dim3 grid_size(2,2);
+dim3 block_size(4,4);
+kernel_fun<<<grid_size,block_size>>>(...);
+int blockId = blockIdx.x + blockIdx.y * gridDIm.x;
+int threadId = threadIdx.x + threadIdx.y * blockDim.x;
+int id = blockId * (blockDim.x * blockDim.y) + threadId;
 ```
 
-*原理：加上 `除数 - 1` 后再做截断除法，能完美保证即便多出 1 个数据，也会为其额外分配一个完整的 Block。多余空闲的线程会由核函数内部的 `i < n` 越界保护挡住，保证安全。*
+3.三维网格三维线程块:
 
-#### 
+```
+dim3 grid_size(2,2,2);
+dim3 block_size(4,4,2);
+kernel_fun<<<grid_size,block_size>>>(...);
+int blockId = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
+int threadId = threadIdx.x +threadIdx.y * blockDim.x +threadIdx.z * blockDim.x * blockDim.y;
+int id = threadId + blockId * (blockDim.x * blockDim.y * blockDim.z);
+```
+
