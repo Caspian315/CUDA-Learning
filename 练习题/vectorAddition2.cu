@@ -15,9 +15,9 @@ int main(void){
     int a[N],b[N],c[N];
     int *dev_a, *dev_b, *dev_c;
 
-    HANDLE_ERROR(cudaMalloc((void**)dev_a,N * sizeof(int)));
-    HANDLE_ERROR(cudaMalloc((void**)dev_b,N * sizeof(int)));
-    HANDLE_ERROR(cudaMalloc((void**)dev_c,N * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void**)&dev_a,N * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void**)&dev_b,N * sizeof(int)));
+    HANDLE_ERROR(cudaMalloc((void**)&dev_c,N * sizeof(int)));
 
     for(int i = 0;i < N; ++I){
         a[i] = i;
