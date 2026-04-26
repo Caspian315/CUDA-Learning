@@ -1,4 +1,4 @@
-//kernel2开始涉及shared_memory
+//kernel3引入 WPT
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -11,40 +11,49 @@
 }
 
 #define TS 32
+#define WPT 8
+#define RTS (TS / WPT)
 
-__global__ void kernel2(int M,int N,int K,float* A,float* B,float* C){
-    //局部坐标
+__global__ void kernel3(int M,int N,int K,float* A,float* B,float* C){
     int row = threadIdx.x;
     int col = threadIdx.y;
 
-    //全局坐标
     int globalRow = TS * blockIdx.x + row;
     int globalCol = TS * blockIdx.y + col;
 
-     __shared__ float Asub[TS][TS];      
-     __shared__ float Bsub[TS][TS];
+    __shared__ float Asub[TS][TS];
+    __shared__ float Bsub[TS][TS];
 
-    float acc = 0.0f;
+    float acc[WPT] = {0.0f};
+    int numTiles = K / TS;
 
-    int numTiles = K / TS;//注意：这里默认K恰好为TS的整数倍！！！
     for(int t = 0;t < numTiles; ++t){
-        int tileCol = TS * t + col;
+        for(int w = 0;w < WPT; ++w){
+        int tileCol = TS * t + col + w * RTS;
         int tileRow = TS * t + row;
 
-        Asub[col][row] = A[tileCol * M + globalRow];
-        Bsub[col][row] = B[globalCol * K + tileRow];
+        Asub[col + w * RTS][row] = A[tileCol * M + globalRow];
+        Bsub[col + w * RTS][row] = B[(globalCol + w * RTS) * K + tileRow];
 
-        __syncthreads();
-
-        for(int k = 0;k < TS;++k){
-            acc += Asub[k][row] * Bsub[col][k];
         }
+
+         __syncthreads();
+
+        for(int k = 0;k < TS; ++k){
+            for(int w = 0;w < WPT; ++w){
+            acc[w] += Asub[k][row] * Bsub[col + w * RTS][k];
+        }
+    }
         __syncthreads();
-    }   
-    C[globalCol * M + globalRow] = acc;
+  }
+    for(int w = 0; w < WPT; ++w){
+        C[(globalCol + w * RTS)*M + globalRow] = acc[w];
+    }
+
 }
 
-int main(){
+
+int main() {
     int M = 1024;
     int N = 1024;
     int K = 1024;
@@ -68,17 +77,19 @@ int main(){
     CHECK_CUDA(cudaMemcpy(dev_A, A, sizeA, cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(dev_B, B, sizeB, cudaMemcpyHostToDevice));
 
-    dim3 threadsPerBlock(TS,TS);
-    dim3 blocksPerGrid((M + threadsPerBlock.x - 1) / threadsPerBlock.x,
-(N + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    //线程块变成了 32 x 4
+    dim3 threadsPerBlock(TS, RTS); 
+    
+    // Grid 的大小依然是整体除以 32，因为一个 Block 整体还是负责 32x32 的矩阵区域
+    dim3 blocksPerGrid((M + TS - 1) / TS, (N + TS - 1) / TS);
+
 
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
 
     cudaEventRecord(start);
-
-    kernel2<<<blocksPerGrid,threadsPerBlock>>>(M,N,K,dev_A,dev_B,dev_C);
+    kernel3<<<blocksPerGrid, threadsPerBlock>>>(M, N, K, dev_A, dev_B, dev_C);
     cudaEventRecord(stop);
 
     cudaEventSynchronize(stop);
