@@ -1,4 +1,40 @@
-# CUDA编程学习笔记
+# CUDA 编程学习笔记
+
+CUDA C / GPU 并行编程个人学习记录。仓库包含环境配置笔记、CUDA 基础示例、向量运算、点积、位图/动画示例和练习题代码。
+
+## Repository Overview
+
+| Path | Description |
+| --- | --- |
+| `chapter03/` | CUDA C 入门、设备查询、kernel 基础 |
+| `chapter04/` | 多线程组织、向量加法等练习 |
+| `练习题/` | 课后练习和 kernel 实验 |
+| `common/` | 示例程序依赖的公共头文件 |
+| 根目录 `.cu` 文件 | 按章节整理的 CUDA 示例代码 |
+
+## Learning Focus
+
+- Host / Device 内存模型
+- `cudaMalloc`、`cudaMemcpy`、`cudaFree`
+- Kernel 启动配置：grid、block、thread
+- 向量加法、点积、并行归约基础
+- CUDA 示例程序的编译和运行流程
+- WSL2 / Ubuntu 环境下的 CUDA 配置
+
+## Build and Run
+
+单文件示例可以直接使用 `nvcc` 编译：
+
+```bash
+nvcc 3-query.cu -o 3-query
+./3-query
+```
+
+部分示例依赖 `common/` 目录或 OpenGL/GLUT 相关文件，运行前需要根据源码 include 和链接参数调整编译命令。
+
+## Notes
+
+该仓库侧重学习过程记录，章节笔记会和代码实验一起持续补充。
 
 
 
